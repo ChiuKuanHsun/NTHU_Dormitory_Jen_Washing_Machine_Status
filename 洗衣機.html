@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>洗衣機即時狀態監控</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #f0f2f5;
+            color: #333;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+        }
+        #machine-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+        }
+        .machine-card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            background-color: #fff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+        .machine-card h2 {
+            margin-top: 0;
+            font-size: 1.2em;
+        }
+        .status {
+            font-size: 1.5em;
+            font-weight: bold;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+            margin-top: 10px;
+        }
+        .status-text {
+            display: block;
+        }
+        .time-left {
+            display: block;
+            font-size: 0.8em;
+            margin-top: 5px;
+            color: #555;
+        }
+        .status.loading { background-color: #e0e0e0; color: #555; }
+        .status.available { background-color: #d4edda; color: #155724; }
+        .status.in-use { background-color: #f8d7da; color: #721c24; }
+        .status.offline { background-color: #fff3cd; color: #856404; }
+    </style>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+</head>
+<body>
+
+    <h1>清大洗衣房狀態</h1>
+    <div id="machine-grid">
+        </div>
+
+    <script>
+        // 2. 定義所有機器的資料
+        const machines = [
+            { name: '仁齋男烘1', mac: '94c96001b2ca', element: null, status: '連線中...', timeLeft: 0 },
+            { name: '仁齋男烘2', mac: '94c96001b3eb', element: null, status: '連線中...', timeLeft: 0 },
+            { name: '七齋男洗1', mac: '94c96001b3e3', element: null, status: '連線中...', timeLeft: 0 },
+            { name: '仁齋男洗2', mac: '94c96001b3f4', element: null, status: '連線中...', timeLeft: 0 },
+            { name: '仁齋男洗3', mac: '94c96001b3f6', element: null, status: '連線中...', timeLeft: 0 },
+            { name: '仁齋男洗4', mac: '94c96001b3f5', element: null, status: '連線中...', timeLeft: 0 },
+        ];
+
+        const allStatuses = {
+            'free': '閒置',
+            'done': '完成',
+            'running': '運轉中',
+            'waiting_operation': '等待操作',
+            'waiting_coin': '等待投幣',
+            'timeout': '離線',
+        };
+
+        const grid = document.getElementById('machine-grid');
+
+        // 初始化頁面卡片
+        machines.forEach(machine => {
+            const card = document.createElement('div');
+            card.className = 'machine-card';
+            card.id = `machine-${machine.mac}`;
+            card.innerHTML = `
+                <h2>${machine.name}</h2>
+                <div class="status loading">
+                    <span class="status-text">連線中...</span>
+                    <span class="time-left"></span>
+                </div>
+            `;
+            grid.appendChild(card);
+            machine.element = card; // 保存 DOM 元素的引用
+        });
+
+        // 3. 連接到 MQTT 伺服器
+        const brokerUrl = 'wss://wipepay.com.tw:443/mqtt/';
+        const client = mqtt.connect(brokerUrl);
+
+        client.on('connect', () => {
+            console.log('成功連接到 MQTT 伺服器！');
+            // 4. 連線成功後，訂閱所有機器的頻道
+            machines.forEach(machine => {
+                const topic = `machine/${machine.mac}/status/`;
+                client.subscribe(topic, (err) => {
+                    if (!err) {
+                        console.log(`成功訂閱: ${topic}`);
+                    }
+                });
+            });
+        });
+
+        // 5. 當收到訊息時，觸發此函數
+        client.on('message', (topic, payload) => {
+            const mac = topic.split('/')[1]; // 從 topic 中解析出 mac 地址
+            const data = JSON.parse(payload.toString());
+
+            // 尋找對應的機器物件
+            const machine = machines.find(m => m.mac === mac);
+            if (!machine) return;
+
+            // 更新機器的 timeLeft 和 status
+            if (data.type === 'status') {
+                const statusInfo = Object.values(allStatuses).find(s => s.code === data.status) || {};
+                
+                // 從原始碼分析出的狀態對應表
+                // 3: free, 6: running, 9: done
+                let statusText = '未知';
+                if (data.status === 256 || data.status === 3072 || data.status === 3200 || data.status === 8192) {
+                    statusText = '閒置/完成';
+                    machine.timeLeft = 0;
+                } else if (data.status === 2048 || data.status === 2176 || data.status === 4096) {
+                    statusText = '運轉中';
+                    // 伺服器會給 timeLeft，我們計算一下現在應該剩多少
+                    const elapsedSeconds = (Date.now() / 1000) - data.ts;
+                    machine.timeLeft = Math.max(0, Math.floor(data.timeLeft - elapsedSeconds));
+                } else if (data.status === 1024 || data.status === 512) {
+                    statusText = '等待操作';
+                    machine.timeLeft = 0;
+                } else {
+                    statusText = `狀態碼: ${data.status}`;
+                    machine.timeLeft = 0;
+                }
+                 machine.status = statusText;
+            }
+            updateMachineDisplay(machine);
+        });
+        
+        // 處理斷線
+        client.on('close', () => {
+             console.log('MQTT 連線中斷');
+             machines.forEach(m => {
+                 m.status = '離線';
+                 updateMachineDisplay(m);
+             });
+        });
+
+        // 獨立的倒數計時器
+        setInterval(() => {
+            machines.forEach(machine => {
+                if (machine.timeLeft > 0) {
+                    machine.timeLeft -= 1;
+                    updateMachineDisplay(machine);
+                }
+            });
+        }, 1000);
+
+
+        // 6. 更新畫面的函數
+        function updateMachineDisplay(machine) {
+            const statusDiv = machine.element.querySelector('.status');
+            const statusTextSpan = machine.element.querySelector('.status-text');
+            const timeLeftSpan = machine.element.querySelector('.time-left');
+
+            statusTextSpan.textContent = machine.status;
+            
+            if (machine.timeLeft > 0) {
+                 const minutes = Math.floor(machine.timeLeft / 60);
+                 const seconds = machine.timeLeft % 60;
+                 timeLeftSpan.textContent = `剩餘時間: ${minutes}分 ${seconds.toString().padStart(2, '0')}秒`;
+            } else {
+                 timeLeftSpan.textContent = '';
+            }
+
+            // 更新顏色
+            statusDiv.className = 'status'; // Reset class
+            if (machine.status.includes('運轉中')) {
+                statusDiv.classList.add('in-use');
+            } else if (machine.status.includes('閒置') || machine.status.includes('完成')) {
+                statusDiv.classList.add('available');
+            } else if (machine.status.includes('離線')) {
+                statusDiv.classList.add('offline');
+            } else {
+                statusDiv.classList.add('loading');
+            }
+        }
+    </script>
+
+</body>
+</html>
