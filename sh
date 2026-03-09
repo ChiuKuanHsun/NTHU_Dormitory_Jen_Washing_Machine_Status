@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>洗衣機即時狀態監控</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #f0f2f5;
+            color: #333;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+        }
+        #machine-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+        }
+        .machine-card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            background-color: #fff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .card-header h2 {
+            margin: 0;
+            font-size: 1.2em;
+        }
+        .status {
+            font-size: 1.5em;
+            font-weight: bold;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+            margin-top: 10px;
+        }
+        .status-text { display: block; }
+        .time-left { display: block; font-size: 0.8em; margin-top: 5px; color: #555; }
+        .status.loading { background-color: #e0e0e0; color: #555; }
+        .status.available { background-color: #d4edda; color: #155724; }
+        .status.in-use { background-color: #f8d7da; color: #721c24; }
+        .status.offline { background-color: #fff3cd; color: #856404; }
+
+        /* --- 您提供的鈴鐺 CSS --- */
+        .container {
+            --color: #a5a5b0;
+            --size: 25px; /* 調整大小以適應卡片 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            cursor: pointer;
+            font-size: var(--size);
+            user-select: none;
+            fill: var(--color);
+        }
+        .container .bell-regular, .container .bell-solid {
+            position: absolute;
+            animation: keyframes-fill .5s;
+        }
+        .container .bell-solid { display: none; }
+        .container input:checked ~ .bell-regular { display: none; }
+        .container input:checked ~ .bell-solid { display: block; }
+        .container input { position: absolute; opacity: 0; cursor: pointer; height: 0; width: 0; }
+        @keyframes keyframes-fill {
+            0% { opacity: 0; }
+            25% { transform: rotate(25deg); }
+            50% { transform: rotate(-20deg) scale(1.2); }
+            75% { transform: rotate(15deg); }
+        }
+    </style>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+</head>
+<body>
+
+    <h1>清大實齋洗衣機狀態</h1>
+    <div id="machine-grid"></div>
+
+    <script>
+        // 在機器資料中增加 notificationEnabled 屬性來追蹤通知狀態
+        const machines = [
+            { name: '實齋烘1', mac: '94c96001b39f', element: null, status: '連線中...', timeLeft: 0, notificationEnabled: false },
+            { name: '實齋烘2', mac: '94c96001b396', element: null, status: '連線中...', timeLeft: 0, notificationEnabled: false },
+            { name: '實齋烘3', mac: '94c96001b38b', element: null, status: '連線中...', timeLeft: 0, notificationEnabled: false },
+            { name: '實齋烘4', mac: '94c96001b39e', element: null, status: '連線中...', timeLeft: 0, notificationEnabled: false },
+            { name: '實齋烘5', mac: '94c96001b380', element: null, status: '連線中...', timeLeft: 0, notificationEnabled: false },
+            { name: '實齋洗1', mac: '94c96001b3ce', element: null, status: '連線中...', timeLeft: 0, notificationEnabled: false },
+            { name: '實齋洗2', mac: '94c96001b3c9', element: null, status: '連線中...', timeLeft: 0, notificationEnabled: false },
+            { name: '實齋洗3', mac: '94c96001b3c2', element: null, status: '連線中...', timeLeft: 0, notificationEnabled: false },
+            { name: '實齋洗4', mac: '94c96001b3cc', element: null, status: '連線中...', timeLeft: 0, notificationEnabled: false },
+        ];
+
+        const grid = document.getElementById('machine-grid');
+
+        // 初始化頁面卡片，並加入鈴鐺按鈕
+        machines.forEach(machine => {
+            const card = document.createElement('div');
+            card.className = 'machine-card';
+            card.id = `machine-${machine.mac}`;
+            card.innerHTML = `
+                <div class="card-header">
+                    <h2>${machine.name}</h2>
+                    <label class="container">
+                        <input type="checkbox">
+                        <svg class="bell-regular" xmlns="http://www.w3.org/2000/svg" height="1em" viewBox="0 0 448 512"><path d="M224 0c-17.7 0-32 14.3-32 32V49.9C119.5 61.4 64 124.2 64 200v33.4c0 45.4-15.5 89.5-43.8 124.9L5.3 377c-5.8 7.2-6.9 17.1-2.9 25.4S14.8 416 24 416H424c9.2 0 17.6-5.3 21.6-13.6s2.9-18.2-2.9-25.4l-14.9-18.6C399.5 322.9 384 278.8 384 233.4V200c0-75.8-55.5-138.6-128-150.1V32c0-17.7-14.3-32-32-32zm0 96h8c57.4 0 104 46.6 104 104v33.4c0 47.9 13.9 94.6 39.7 134.6H72.3C98.1 328 112 281.3 112 233.4V200c0-57.4 46.6-104 104-104h8zm64 352H224 160c0 17 6.7 33.3 18.7 45.3s28.3 18.7 45.3 18.7s33.3-6.7 45.3-18.7s18.7-28.3 18.7-45.3z"/></svg>
+                        <svg class="bell-solid" xmlns="http://www.w3.org/2000/svg" height="1em" viewBox="0 0 448 512"><path d="M224 0c-17.7 0-32 14.3-32 32V51.2C119 66 64 130.6 64 208v18.8c0 47-17.3 92.4-48.5 127.6l-7.4 8.3c-8.4 9.4-10.4 22.9-5.3 34.4S19.4 416 32 416H416c12.6 0 24-7.4 29.2-18.9s3.1-25-5.3-34.4l-7.4-8.3C401.3 319.2 384 273.9 384 226.8V208c0-77.4-55-142-128-156.8V32c0-17.7-14.3-32-32-32zm45.3 493.3c12-12 18.7-28.3 18.7-45.3H224 160c0 17 6.7 33.3 18.7 45.3s28.3 18.7 45.3 18.7s33.3-6.7 45.3-18.7z"/></svg>
+                    </label>
+                </div>
+                <div class="status loading">
+                    <span class="status-text">連線中...</span>
+                    <span class="time-left"></span>
+                </div>
+            `;
+            grid.appendChild(card);
+            machine.element = card;
+
+            // 為每個鈴鐺按鈕添加點擊事件
+            const notificationCheckbox = card.querySelector('input[type="checkbox"]');
+            notificationCheckbox.addEventListener('change', (event) => {
+                handleNotificationToggle(machine, event.target.checked);
+            });
+        });
+
+        // 處理鈴鐺點擊的函數
+        function handleNotificationToggle(machine, isEnabled) {
+            // 檢查機器是否正在運轉中
+            if (isEnabled && !machine.status.includes('運轉中')) {
+                alert(`${machine.name} 目前是閒置狀態，無需設定通知。`);
+                machine.element.querySelector('input[type="checkbox"]').checked = false;
+                return;
+            }
+
+            // 檢查並請求通知權限
+            if (Notification.permission === 'granted') {
+                machine.notificationEnabled = isEnabled;
+                console.log(`${machine.name} 通知已 ${isEnabled ? '開啟' : '關閉'}`);
+            } else if (Notification.permission !== 'denied') {
+                Notification.requestPermission().then(permission => {
+                    if (permission === 'granted') {
+                        machine.notificationEnabled = isEnabled;
+                        console.log(`${machine.name} 通知已 ${isEnabled ? '開啟' : '關閉'}`);
+                    } else {
+                        // 如果使用者拒絕，則將 checkbox 彈回
+                        machine.element.querySelector('input[type="checkbox"]').checked = false;
+                    }
+                });
+            } else {
+                // 如果權限已被拒絕
+                alert('您已封鎖此網站的通知，請至瀏覽器設定中重新開啟。');
+                machine.element.querySelector('input[type="checkbox"]').checked = false;
+            }
+        }
+
+        // 發送桌面通知的函數
+        function sendNotification(machine) {
+            if (Notification.permission !== 'granted') return;
+
+            const title = '洗衣機好了！👕';
+            const options = {
+                body: `${machine.name} 已完成運轉，可以去取衣物囉！`,
+                // 您可以換成自己的圖示 URL
+                icon: 'https://cdn-icons-png.flaticon.com/512/3094/3094916.png' 
+            };
+            new Notification(title, options);
+        }
+
+        // --- MQTT 連線與訊息處理 (與先前版本類似，但增加了狀態變化監聽) ---
+        const brokerUrl = 'wss://wipepay.com.tw:443/mqtt/';
+        const client = mqtt.connect(brokerUrl);
+
+        client.on('connect', () => {
+            machines.forEach(machine => {
+                client.subscribe(`machine/${machine.mac}/status/`);
+            });
+        });
+
+        client.on('message', (topic, payload) => {
+            const mac = topic.split('/')[1];
+            const data = JSON.parse(payload.toString());
+            const machine = machines.find(m => m.mac === mac);
+            if (!machine || data.type !== 'status') return;
+
+            const oldStatus = machine.status; // 保存舊狀態
+            let newStatus = '未知';
+
+            if ([256, 3072, 3200, 8192].includes(data.status)) {
+                newStatus = '閒置/完成';
+                machine.timeLeft = 0;
+            } else if ([2048, 2176, 4096].includes(data.status)) {
+                newStatus = '運轉中';
+                const elapsedSeconds = (Date.now() / 1000) - data.ts;
+                machine.timeLeft = Math.max(0, Math.floor(data.timeLeft - elapsedSeconds));
+            } else {
+                newStatus = `等待操作 (${data.status})`;
+                machine.timeLeft = 0;
+            }
+            machine.status = newStatus;
+
+            // **核心：檢查狀態變化並觸發通知**
+            if (machine.notificationEnabled && oldStatus.includes('運轉中') && newStatus.includes('閒置/完成')) {
+                sendNotification(machine);
+                // 發送後自動關閉通知並取消勾選
+                machine.notificationEnabled = false;
+                machine.element.querySelector('input[type="checkbox"]').checked = false;
+            }
+
+            updateMachineDisplay(machine);
+        });
+        
+        // --- 倒數計時與畫面更新 ---
+        setInterval(() => {
+            machines.forEach(machine => {
+                if (machine.timeLeft > 0) {
+                    machine.timeLeft -= 1;
+                    if (machine.timeLeft === 0 && machine.status.includes('運轉中')) {
+                         // 當本地計時器歸零時，也觸發檢查
+                         const oldStatus = machine.status;
+                         machine.status = '閒置/完成';
+                         if (machine.notificationEnabled) {
+                             sendNotification(machine);
+                             machine.notificationEnabled = false;
+                             machine.element.querySelector('input[type="checkbox"]').checked = false;
+                         }
+                    }
+                    updateMachineDisplay(machine);
+                }
+            });
+        }, 1000);
+
+        function updateMachineDisplay(machine) {
+            // ... (畫面更新邏輯與前一版相同) ...
+            const statusDiv = machine.element.querySelector('.status');
+            const statusTextSpan = machine.element.querySelector('.status-text');
+            const timeLeftSpan = machine.element.querySelector('.time-left');
+            statusTextSpan.textContent = machine.status;
+            if (machine.timeLeft > 0) {
+                 const minutes = Math.floor(machine.timeLeft / 60);
+                 const seconds = machine.timeLeft % 60;
+                 timeLeftSpan.textContent = `剩餘時間: ${minutes}分 ${seconds.toString().padStart(2, '0')}秒`;
+            } else {
+                 timeLeftSpan.textContent = '';
+            }
+            statusDiv.className = 'status';
+            if (machine.status.includes('運轉中')) statusDiv.classList.add('in-use');
+            else if (machine.status.includes('閒置') || machine.status.includes('完成')) statusDiv.classList.add('available');
+            else if (machine.status.includes('離線')) statusDiv.classList.add('offline');
+            else statusDiv.classList.add('loading');
+        }
+    </script>
+
+</body>
+</html>
+
